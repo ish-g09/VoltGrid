@@ -18,9 +18,11 @@ public class IntervalTree {
             return true;
         }
 
-        // Pruning logic: if left child maxEnd > start, search left branch
+        // Search left subtree if its maxEnd is after the requested start time
         if (node.left != null && node.left.maxEnd.isAfter(start)) {
-            return checkOverlap(node.left, start, end);
+            if (checkOverlap(node.left, start, end)) {
+                return true;
+            }
         }
 
         return checkOverlap(node.right, start, end);
@@ -41,10 +43,61 @@ public class IntervalTree {
             node.right = insertNode(node.right, start, end, reservationId, bayId);
         }
 
-        if (node.maxEnd.isBefore(end)) {
-            node.maxEnd = end;
+        updateMaxEnd(node);
+        return node;
+    }
+
+    /**
+     * O(log N) deletion of a reservation with subtree maxEnd maintenance
+     */
+    public boolean delete(String reservationId) {
+        boolean[] deleted = new boolean[1];
+        root = deleteNode(root, reservationId, deleted);
+        return deleted[0];
+    }
+
+    private IntervalNode deleteNode(IntervalNode node, String reservationId, boolean[] deleted) {
+        if (node == null) return null;
+
+        if (reservationId.equals(node.reservationId)) {
+            deleted[0] = true;
+            if (node.left == null) return node.right;
+            if (node.right == null) return node.left;
+
+            // Inorder successor
+            IntervalNode successor = getMin(node.right);
+            node.start = successor.start;
+            node.end = successor.end;
+            node.reservationId = successor.reservationId;
+            node.bayId = successor.bayId;
+
+            node.right = deleteNode(node.right, successor.reservationId, new boolean[1]);
+        } else {
+            node.left = deleteNode(node.left, reservationId, deleted);
+            if (!deleted[0]) {
+                node.right = deleteNode(node.right, reservationId, deleted);
+            }
         }
 
+        updateMaxEnd(node);
         return node;
+    }
+
+    private IntervalNode getMin(IntervalNode node) {
+        while (node.left != null) {
+            node = node.left;
+        }
+        return node;
+    }
+
+    private void updateMaxEnd(IntervalNode node) {
+        if (node == null) return;
+        node.maxEnd = node.end;
+        if (node.left != null && node.left.maxEnd.isAfter(node.maxEnd)) {
+            node.maxEnd = node.left.maxEnd;
+        }
+        if (node.right != null && node.right.maxEnd.isAfter(node.maxEnd)) {
+            node.maxEnd = node.right.maxEnd;
+        }
     }
 }

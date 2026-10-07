@@ -2,43 +2,70 @@ package com.evcharger.evchargingsystem.service;
 
 import org.springframework.stereotype.Service;
 import java.time.Instant;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 @Service
 public class ConcurrentIntervalTreeService {
 
-    private final IntervalTree intervalTree = new IntervalTree();
-    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    // Dedicated IntervalTree per charging bay (prevents bay contention & false cross-bay overlaps)
+    private final ConcurrentHashMap<String, IntervalTree> bayTrees = new ConcurrentHashMap<>();
+    
+    // Lock Striping: Dedicated ReentrantReadWriteLock per bay
+    private final ConcurrentHashMap<String, ReentrantReadWriteLock> bayLocks = new ConcurrentHashMap<>();
+
+    private IntervalTree getTreeForBay(String bayId) {
+        return bayTrees.computeIfAbsent(bayId, k -> new IntervalTree());
+    }
+
+    private ReentrantReadWriteLock getLockForBay(String bayId) {
+        return bayLocks.computeIfAbsent(bayId, k -> new ReentrantReadWriteLock());
+    }
 
     /**
-     * Reserve a slot safely across multiple concurrent threads
+     * Reserve a slot safely for a specific bay.
+     * Only locks the targeted bay, allowing parallel bookings across different bays.
      */
     public boolean reserveSlot(Instant start, Instant end, String reservationId, String bayId) {
-        // Step A: Acquire Exclusive Write Lock (Blocks all reads/writes during insertion)
+        ReentrantReadWriteLock lock = getLockForBay(bayId);
         lock.writeLock().lock();
         try {
-            // Step B: Check overlap while holding the write lock to eliminate race conditions
-            if (intervalTree.isOverlapping(start, end)) {
-                return false; // Slot already occupied
+            IntervalTree tree = getTreeForBay(bayId);
+            if (tree.isOverlapping(start, end)) {
+                return false; // Overlap detected on this bay
             }
-            // Step C: Insert into Tree
-            intervalTree.insert(start, end, reservationId, bayId);
+            tree.insert(start, end, reservationId, bayId);
             return true;
         } finally {
-            // Step D: Always unlock in a finally block to prevent deadlocks
             lock.writeLock().unlock();
         }
     }
 
     /**
-     * Read-only operation: multiple threads can query availability simultaneously
+     * Read-only operation: multiple threads can query bay availability concurrently.
      */
-    public boolean checkAvailability(Instant start, Instant end) {
+    public boolean checkAvailability(Instant start, Instant end, String bayId) {
+        ReentrantReadWriteLock lock = getLockForBay(bayId);
         lock.readLock().lock();
         try {
-            return !intervalTree.isOverlapping(start, end);
+            IntervalTree tree = getTreeForBay(bayId);
+            return !tree.isOverlapping(start, end);
         } finally {
             lock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Cancel an existing reservation to liberate the slot.
+     */
+    public boolean cancelReservation(String bayId, String reservationId) {
+        ReentrantReadWriteLock lock = getLockForBay(bayId);
+        lock.writeLock().lock();
+        try {
+            IntervalTree tree = getTreeForBay(bayId);
+            return tree.delete(reservationId);
+        } finally {
+            lock.writeLock().unlock();
         }
     }
 }
